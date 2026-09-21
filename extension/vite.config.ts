@@ -14,7 +14,8 @@ export default defineConfig({
     outDir: "dist",
     rollupOptions: {
       input: {
-        popup: resolve(__dirname, "index.html"),
+        popup: resolve(__dirname, "popup.html"),
+        onboarding: resolve(__dirname, "onboarding.html"),
         background: resolve(__dirname, "src/workers/background.ts"),
       },
       output: {

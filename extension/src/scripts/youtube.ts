@@ -1,49 +1,71 @@
 // youtube.ts
-import browser, { Runtime } from "webextension-polyfill";
-import { Message } from "../types";
-import { LocalStorage } from "../utils/storage";
+import {
+    initSettings,
+    listenToSettingsChange,
+    useSettings,
+} from "@/stores/useSettings";
+import { ContentMessageClient } from "../messaging";
 
-let threshold = 60;
+const unSubSettingsChange = listenToSettingsChange();
+const classifierClient = new ContentMessageClient({ portName: "classifier" });
+const THRESHOLD_QUOTIENT = 10;
 
-class ClassifierPortConnection {
-    private static port: Runtime.Port | null = null;
-    private constructor() {}
+let isDestroyed = false;
+let currentObserver: MutationObserver | null = null;
 
-    private static getPort(): Runtime.Port {
-        if (!this.port) {
-            this.port = browser.runtime.connect({ name: "classifier" });
-            this.port.onDisconnect.addListener(() => {
-                this.port = null;
-            });
-        }
-        return this.port;
+function destroy(reason = "Extension context invalidated"): void {
+    if (isDestroyed) return;
+    isDestroyed = true;
+
+    if (currentObserver) {
+        currentObserver.disconnect();
+        currentObserver = null;
     }
 
-    static onMessage(callback: (msg: Message) => void | Promise<void>): void {
-        this.getPort().onMessage.addListener((message) => {
-            void callback(message as Message);
+    window.removeEventListener("yt-navigate-finish", handleUrlChange);
+
+    classifierClient.disconnect();
+
+    unSubSettingsChange();
+
+    document
+        .querySelectorAll<HTMLElement>("ytd-comment-thread-renderer")
+        .forEach((node) => {
+            if (node.style.visibility === "hidden") {
+                node.style.visibility = "visible";
+            }
         });
-    }
 
-    static send(text: string, id: string): void {
-        const message: Message = {
-            category: "CLASSIFICATION",
-            from: "front",
-            data: { text, id },
-        };
-        this.getPort().postMessage(message);
-    }
+    console.info(
+        `[Sizzle] ${reason}. Comment processing stopped on this tab. Refreshing may fix the issue.`,
+    );
 }
+
+// Auto-destroy when classifierClient detects invalidation
+classifierClient.onInvalidated(() => {
+    destroy();
+});
 
 async function waitForElement(
     parent: Node,
     selector: string,
-): Promise<Element> {
+): Promise<Element | null> {
+    if (isDestroyed || !classifierClient.isValid()) {
+        destroy();
+        return null;
+    }
+
     const existing = document.querySelector(selector);
     if (existing) return existing;
 
     return new Promise((resolve) => {
         const observer = new MutationObserver(() => {
+            if (isDestroyed || !classifierClient.isValid()) {
+                observer.disconnect();
+                destroy();
+                resolve(null);
+                return;
+            }
             const element = document.querySelector(selector);
             if (element) {
                 observer.disconnect();
@@ -83,7 +105,7 @@ function checkValidity(): boolean {
     return re.test(document.URL);
 }
 
-function cleanGhostRenderers(node: Element): void {
+function cleanGhostLoader(node: Element): void {
     const ghosts = node.querySelectorAll(
         "ytd-continuation-item-renderer.ytd-item-section-renderer",
     );
@@ -92,93 +114,169 @@ function cleanGhostRenderers(node: Element): void {
     });
 }
 
+/**
+ * Classifies an individual YouTube comment element and hides/shows/removes it.
+ */
+async function processComment(node: HTMLElement): Promise<void> {
+    const state = useSettings.getState();
+    const visible = () => {
+        node.style.visibility = "visible";
+    };
+    if (isDestroyed || !classifierClient.isValid()) {
+        destroy();
+        return;
+    }
+    // Temporarily hide comment while evaluation is in-flight
+    node.style.visibility = "hidden";
+
+    const span = node.querySelector(
+        "#comment-container #comment #body #main #expander #content #content-text span",
+    );
+
+    const text = span && extractText(span);
+    if (!text) return visible();
+
+    try {
+        const { score } = await classifierClient.classify(text);
+        console.log(score, score < state.qualityThreshold/THRESHOLD_QUOTIENT);
+        if (score < state.qualityThreshold/THRESHOLD_QUOTIENT) {
+            node.remove();
+        } else {
+            visible();
+        }
+    } catch (err) {
+        visible();
+
+        if (classifierClient.isContextInvalidatedError(err)) {
+            destroy();
+            return;
+        }
+
+        console.warn(
+            "[Sizzle] Failed to classify comment, displaying as fallback:",
+            err,
+        );
+    }
+}
+
 function getRenderedComments(mutations: MutationRecord[]): void {
+    if (isDestroyed || !classifierClient.isValid()) {
+        destroy();
+        return;
+    }
+
     for (const mutation of mutations) {
         for (const node of mutation.addedNodes) {
             if (
-                !(node instanceof Element) ||
-                !node.matches("ytd-comment-thread-renderer")
-            )
-                continue;
-
-            const span = node.querySelector(
-                "#comment-container #comment #body #main #expander #content #content-text span",
-            );
-            const text = span && extractText(span);
-            if (!text) continue;
-
-            if (node instanceof HTMLElement) node.style.visibility = "hidden";
-            const uuid = "sizzle" + crypto.randomUUID();
-            node.id = uuid;
-            ClassifierPortConnection.send(text, uuid);
+                node instanceof HTMLElement &&
+                node.matches("ytd-comment-thread-renderer")
+            ) {
+                void processComment(node);
+            }
         }
     }
 }
 
-function interceptComments(msg: Message): void {
-    if (msg.category !== "CLASSIFICATION" || msg.from !== "back") return;
-
-    const node = document.getElementById(msg.result.id);
-    if (msg.result.result < threshold / 100) {
-        node?.remove();
-    } else if (node instanceof HTMLElement) {
-        node.style.visibility = "visible";
-    }
-}
-
 async function addCommentListener(): Promise<MutationObserver | undefined> {
+    if (isDestroyed || !classifierClient.isValid()) {
+        destroy();
+        return;
+    }
+
     const commentsElement = await waitForElement(
         document,
         "#below ytd-comments ytd-item-section-renderer #contents",
     );
-    if (!commentsElement) return;
+    if (!commentsElement || isDestroyed) return;
 
     const observer = new MutationObserver((mutations) => {
+        if (isDestroyed || !classifierClient.isValid()) {
+            destroy();
+            return;
+        }
         getRenderedComments(mutations);
-        cleanGhostRenderers(commentsElement);
+        cleanGhostLoader(commentsElement);
     });
     observer.observe(commentsElement, { childList: true });
     return observer;
 }
 
-async function addPageListener(): Promise<void> {
-    console.log(`Extension loaded with threshold ${threshold / 100}!`);
-
-    let previousObserver: MutationObserver | null = null;
-
-    async function handleUrlChange(): Promise<void> {
-        previousObserver?.disconnect();
-        const wakeUp: Message = { category: "WAKE_UP_CALL", from: "front" };
-        await browser.runtime.sendMessage(wakeUp);
-
-        if (checkValidity()) {
-            previousObserver = (await addCommentListener()) ?? null;
-        }
+async function handleUrlChange(): Promise<void> {
+    if (isDestroyed || !classifierClient.isValid()) {
+        destroy();
+        return;
     }
+
+    currentObserver?.disconnect();
+    currentObserver = null;
+
+    // Send a ping to awaken the background service worker
+    try {
+        await classifierClient.ping();
+    } catch (err) {
+        if (classifierClient.isContextInvalidatedError(err)) {
+            destroy();
+            return;
+        }
+        // Ping error can happen if worker is waking up; subsequent calls will reconnect
+    }
+
+    if (checkValidity()) {
+        currentObserver = (await addCommentListener()) ?? null;
+    }
+}
+
+async function addPageListener(): Promise<void> {
+    const state = useSettings.getState();
+    console.log(`[Sizzle] Threshold: ${state.qualityThreshold}`);
 
     (["pushState", "replaceState"] as const).forEach((method) => {
         const original = history[method].bind(history);
         history[method] = function (
             ...args: Parameters<History[typeof method]>
         ) {
-            original(...args);
-            void handleUrlChange();
+            Reflect.apply(original, history, args);
+            if (!isDestroyed) {
+                void handleUrlChange();
+            }
         };
     });
     window.addEventListener("yt-navigate-finish", handleUrlChange);
 
     await handleUrlChange();
-
-    ClassifierPortConnection.onMessage(interceptComments);
 }
 
-window.addEventListener("load", async () => {
-    const data = await LocalStorage.get({
-        sizzle_enabled: true,
-        sizzle_threshold: 60,
-    });
-    threshold = data.sizzle_threshold ?? 60;
-    if (data.sizzle_enabled ?? true) {
-        await addPageListener();
+async function init(): Promise<void> {
+    try {
+        await initSettings();
+        const state = useSettings.getState();
+        if (state.onboarding) {
+            console.warn(
+                "[Sizzle] Necessary files are not installed yet, open the extension popup to install them.",
+            );
+            return;
+        }
+        if (!classifierClient.isValid()) {
+            throw Error("Classifier client invalid!");
+        }
+        if (state.isEnabled ?? false) {
+            await addPageListener();
+        }
+    } catch (err) {
+        if (classifierClient.isContextInvalidatedError(err)) {
+            destroy();
+            return;
+        }
+        unSubSettingsChange();
+        console.warn("[Sizzle] Failed to initialize:", err);
     }
-});
+}
+
+if (
+    document.readyState === "complete" ||
+    document.readyState === "interactive"
+) {
+    void init();
+} else {
+    window.addEventListener("load", () => void init(), { once: true });
+}

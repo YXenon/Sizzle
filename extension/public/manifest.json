@@ -11,7 +11,7 @@
     "128": "./logo.png"
   },
   "action": {
-    "default_popup": "./index.html",
+    "default_popup": "./popup.html",
     "default_icon":  "./logo.png"
   },
   "permissions": [

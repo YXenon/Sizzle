@@ -12,7 +12,7 @@ export default defineConfig({
       output: {
         entryFileNames: '[name].js',
         format: 'es',
-        inlineDynamicImports: true,
+        codeSplitting: true,
       }
     }
   }

@@ -1,0 +1,6 @@
+html, body, #root {
+  width: 400px;
+  height: 240px;
+  overflow: hidden;
+  display: block; /* Ensure they behave as blocks */
+}

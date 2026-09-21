@@ -1,28 +1,39 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-@import "@fontsource-variable/geist";
 
 @custom-variant dark (&:is(.dark *));
 
 @font-face {
-    font-family: 'GoogleSansBold';
+    font-family: 'Google_Sans_Bold';
     src: url('./fonts/Google_Sans_Bold.woff') format('woff');
     font-weight: 600;
     font-style: normal;
 }
 @font-face {
-    font-family: 'GoogleSansSemiBold';
+    font-family: 'Google_Sans_Semi_Bold';
     src: url('./fonts/Google_Sans_SemiBold.woff') format('woff');
+    font-weight: 900;
+    font-style: normal;
+}
+@font-face {
+    font-family: 'Google_Sans_Medium';
+    src: url('./fonts/Google_Sans_Medium.woff') format('woff');
+    font-weight: 900;
+    font-style: normal;
+}
+@font-face {
+    font-family: 'Google_Sans_Regular';
+    src: url('./fonts/Google_Sans_Regular.woff') format('woff');
     font-weight: 900;
     font-style: normal;
 }
 
 @theme {
-  --font-google_bold: "GoogleSansBold";
-}
-@theme {
-  --font-google_semi: "GoogleSansSemiBold"
+  --font-google-bold: "Google_Sans_Bold";
+  --font-google-semi: "Google_Sans_Semi_Bold";
+  --font-google-regular: "Google_Sans_Regular";
+  --font-google-medium: "Google_Sans_Medium";
 }
 
 :root {
@@ -70,16 +81,13 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+  --sizzle: oklch(65.9% 0.226 35.8);
 }
-
 
 html, body, #root {
   margin: 0;
   padding: 0;
-  width: 350px;
-  height: 260px;
-  overflow: hidden;
-  display: block; /* Ensure they behave as blocks */
+  color: var(--primary);
 }
 
 /* Ensure #root takes up the full space properly if it was flex before */
@@ -122,6 +130,7 @@ html, body, #root {
     --color-card: var(--card);
     --color-foreground: var(--foreground);
     --color-background: var(--background);
+    --color-sizzle: var(--sizzle);
     --radius-sm: calc(var(--radius) * 0.6);
     --radius-md: calc(var(--radius) * 0.8);
     --radius-lg: var(--radius);
@@ -175,4 +184,12 @@ html, body, #root {
   html {
     @apply font-sans;
     }
+}
+
+@utility scrollbar-hidden {
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
 }
