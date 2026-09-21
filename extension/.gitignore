@@ -1,5 +1,6 @@
 node_modules
 dist
 package-lock.json
-dist.crx
-dist.pem
+sizzle.crx
+sizzle.xpi
+sizzle.pem
